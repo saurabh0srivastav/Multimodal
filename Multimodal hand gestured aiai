@@ -1,0 +1,79 @@
+import cv2
+import mediapipe as mp
+import pyautogui
+import google.generativeai as genai
+import pyttsx3
+import math
+
+# --- CONFIGURATION ---
+genai.configure(api_key=)
+model = genai.GenerativeModel('gemini-1.5-flash')
+engine = pyttsx3.init()
+
+def speak(text):
+    print(f"AI: {text}")
+    engine.say(text)
+    engine.runAndWait()
+
+# --- VISION SETUP ---
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
+mp_draw = mp.solutions.drawing_utils
+cap = cv2.VideoCapture(0)
+
+print("System Ready. Gestures: \n1. Victory (Index+Middle) = AI Screen Summary\n2. Thumbs Up = Latest News\n3. Pinch = Photoshop Zoom")
+
+while cap.isOpened():
+    success, img = cap.read()
+    if not success: break
+    img = cv2.flip(img, 1)
+    h, w, c = img.shape
+    results = hands.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+    if results.multi_hand_landmarks:
+        for hand_lms in results.multi_hand_landmarks:
+            # Get key landmark points
+            tip_8 = hand_lms.landmark[8]  # Index
+            tip_12 = hand_lms.landmark[12] # Middle
+            tip_4 = hand_lms.landmark[4]  # Thumb
+
+            # Convert to pixels
+            x8, y8 = int(tip_8.x * w), int(tip_8.y * h)
+            x4, y4 = int(tip_4.x * w), int(tip_4.y * h)
+
+            # --- GESTURE 1: VICTORY SIGN (AI PDF/SCREEN SUMMARY) ---
+            # Index and Middle are up
+            if tip_8.y < hand_lms.landmark[6].y and tip_12.y < hand_lms.landmark[10].y:
+                cv2.putText(img, "AI SCANNING SCREEN...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                # Take screenshot of your PDF or Work
+                pyautogui.screenshot("context.png")
+                # Send to Gemini
+                sample_file = genai.upload_file(path="context.png")
+                response = model.generate_content(["Summarize the text or PDF content on this screen.", sample_file])
+                speak(response.text)
+                cv2.waitKey(5000) # Pause to prevent spamming
+
+            # --- GESTURE 2: THUMBS UP (REAL-TIME NEWS) ---
+            elif tip_4.y < tip_8.y and tip_4.y < tip_12.y:
+                cv2.putText(img, "FETCHING NEWS...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+                response = model.generate_content("Give me a 2-sentence update on world news for today.")
+                speak(response.text)
+                cv2.waitKey(5000)
+
+            # --- GESTURE 3: PINCH (PHOTOSHOP CONTROL) ---
+            distance = math.hypot(x8 - x4, y8 - y4)
+            if distance < 30:
+                cv2.circle(img, (x8, y8), 15, (0, 0, 255), cv2.FILLED)
+                # If hand is high, zoom in; if low, zoom out
+                if y8 < h/2:
+                    pyautogui.hotkey('ctrl', '+') # Photoshop Zoom In
+                else:
+                    pyautogui.hotkey('ctrl', '-') # Photoshop Zoom Out
+
+            mp_draw.draw_landmarks(img, hand_lms, mp_hands.HAND_CONNECTIONS)
+
+    cv2.imshow("Omni-Assistant", img)
+    if cv2.waitKey(1) & 0xFF == ord('q'): break
+
+cap.release()
+cv2.destroyAllWindows()
